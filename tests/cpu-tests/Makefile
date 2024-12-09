@@ -29,6 +29,7 @@ run: all
 
 gdb: all
 
+#清理
 clean:
 	rm -rf Makefile.* build/
 
