@@ -7,7 +7,7 @@
 // hit the same backing store; we still keep the dual base test in case the
 // SoC top is later updated to instantiate psram_top_apb on the 0x80000000
 // half of the window. The stand-alone iverilog harness under
-// ysyx-workbench/tests/mem-test-rtl/ separately validates the psram.v /
+// ysyx-workbench/npc/tests/mem-test-rtl/ separately validates the psram.v /
 // sdram.v die models against their real controllers.
 //
 // The test reuses the trick from the C++ TRM hello image: text/data is
@@ -29,7 +29,7 @@
 // half of the documented memory window to the SDRAM channel; the
 // 0xa0000000-0xbfffffff half is currently unmapped. Both test bases below
 // therefore live in the 0x8.. region. The standalone iverilog harness
-// under ysyx-workbench/tests/mem-test-rtl/ separately validates the
+// under ysyx-workbench/npc/tests/mem-test-rtl/ separately validates the
 // psram.v / sdram.v die models with their real controllers.
 #define PSRAM_BASE  0x80100000u
 #define SDRAM_BASE  0x80200000u
