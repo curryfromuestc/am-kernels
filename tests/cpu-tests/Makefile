@@ -1,5 +1,12 @@
 .PHONY: all run gdb clean latest $(ALL)
 
+# Auto-detect AM_HOME and NEMU_HOME if not provided via environment, so the
+# verifier can run `make ARCH=riscv32-nemu run` without sourcing a shell rc.
+AM_HOME    ?= $(abspath $(CURDIR)/../../../abstract-machine)
+NEMU_HOME  ?= $(abspath $(CURDIR)/../../../nemu)
+export AM_HOME
+export NEMU_HOME
+
 RESULT = .result
 $(shell > $(RESULT))
 

@@ -22,9 +22,19 @@ static const word ppu_base_nametable_addresses[4] = { 0x2000, 0x2400, 0x2800, 0x
 // For sprite-0-hit checks
 static byte ppu_screen_background[264][248];
 
-// Precalculated tile high and low bytes addition for pattern tables
-static byte ppu_l_h_addition_table[256][256][8];
-static byte ppu_l_h_addition_flip_table[256][256][8];
+// `ppu_l_h_addition_table[l][h][x]` and `..._flip_table[l][h][x]` originally
+// cached an 8 MiB pair of LUTs holding (((h >> ?) & 1) << 1) | ((l >> ?) & 1)
+// for every (l,h,x). On a real PC that lookup is cheap, but on a serial-only
+// ysyxSoC harness the LUTs ballooned the .bss to ~1.5 MiB which then had to
+// be ferried over the bit-banged SPI flash at ~3000 cycles/byte. That alone
+// pushed total boot past 1000 wall-clock seconds.
+//
+// The expression is two bit picks + a shift, so inline it as macros. This
+// drops .bss by 1 MiB (-67 %) and skips a quarter-million-iteration init.
+#define PPU_LH_BIT(l, h, x) \
+  ((byte)(((((h) >> (7 - (x))) & 1) << 1) | (((l) >> (7 - (x))) & 1)))
+#define PPU_LH_BIT_FLIP(l, h, x) \
+  ((byte)(((((h) >> (x)) & 1) << 1) | (((l) >> (x)) & 1)))
 
 
 // PPUCTRL Functions
@@ -144,7 +154,7 @@ void ppu_draw_background_scanline(bool mirror) {
 
     int x;
     for (x = 0; x < 8; x ++) {
-      byte color = ppu_l_h_addition_table[l][h][x];
+      byte color = PPU_LH_BIT(l, h, x);
 
       // Color 0 is transparent
       if (color != 0) {
@@ -200,7 +210,7 @@ void ppu_draw_sprite_scanline() {
     word palette_address = 0x3F10 + (palette_attribute << 2);
     int x;
     for (x = 0; x < 8; x ++) {
-      int color = hflip ? ppu_l_h_addition_flip_table[l][h][x] : ppu_l_h_addition_table[l][h][x];
+      int color = hflip ? PPU_LH_BIT_FLIP(l, h, x) : PPU_LH_BIT(l, h, x);
 
       // Color 0 is transparent
       if (color != 0) {
@@ -406,17 +416,9 @@ void ppu_init() {
   ppu.PPUSTATUS |= 0xA0;
   ppu.PPUDATA = 0;
   ppu_2007_first_read = true;
-
-  // Initializing low-high byte-pairs for pattern tables
-  int h, l, x;
-  for (h = 0; h < 0x100; h ++) {
-    for (l = 0; l < 0x100; l ++) {
-      for (x = 0; x < 8; x ++) {
-        ppu_l_h_addition_table[l][h][x] = (((h >> (7 - x)) & 1) << 1) | ((l >> (7 - x)) & 1);
-        ppu_l_h_addition_flip_table[l][h][x] = (((h >> x) & 1) << 1) | ((l >> x) & 1);
-      }
-    }
-  }
+  // The 256x256x8 LUT init that used to live here is gone: the lookup is now
+  // expressed inline via PPU_LH_BIT / PPU_LH_BIT_FLIP. See note above the
+  // macro definitions for rationale.
 }
 
 void ppu_sprram_write(byte data) {

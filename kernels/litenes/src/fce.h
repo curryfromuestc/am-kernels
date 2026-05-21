@@ -6,7 +6,40 @@
 #define FPS          60
 #define SCR_W       256
 #define SCR_H       240
-#define FRAME_SKIP    1
+
+// HAS_GUI selects between framebuffer (AM_GPU) and character output.
+// On platforms with a real GPU (NEMU, native), define HAS_GUI to use the
+// 256x240 RGB framebuffer. On bare-metal targets like ysyxSoC where only a
+// serial UART is wired up (no framebuffer in the AM IOE), leave HAS_GUI
+// undefined: fce.c will then downsample the 256x240 NES canvas to a small
+// ASCII grid and print it via putch() with ANSI cursor controls.
+//
+// The npc platform stub reports __am_gpu_config(present=false). We gate
+// HAS_GUI on the platform here so minirv-nemu / riscv*-nemu (which all
+// have a real GPU through platform/nemu/ioe/gpu.c) keep the framebuffer
+// path, while the ysyxSoC + NPC backend uses ASCII art.
+//
+// NOTE: abstract-machine/Makefile spells the platform macro without a
+// trailing `__`: see the line that emits `-D__PLATFORM_$(PLATFORM_UPPER)`
+// (no extra underscores). Earlier versions of this file used
+// __PLATFORM_NPC__ which is never defined, so the binary fell back to the
+// AM_GPU framebuffer path and panicked with "screen too small" on NPC.
+#ifndef __PLATFORM_NPC
+# define HAS_GUI
+#endif
+
+#ifdef HAS_GUI
+# define FRAME_SKIP   1
+#else
+// On the slow ysyxSoC verilator harness one NES frame already needs many
+// minutes of wall-clock simulation (the 6502 emulator + AXI/SPI/UART
+// latency dominate, not the renderer), so FRAME_SKIP doesn't actually
+// save wall time -- the LSU is the bottleneck, not the framebuffer. Keep
+// FRAME_SKIP at 0 so the very first frame the PPU completes is also the
+// first frame we render to the terminal; otherwise the user waits an
+// extra (FRAME_SKIP) * hours-per-frame to see anything at all.
+# define FRAME_SKIP   0
+#endif
 
 void fce_update_screen();
 int fce_load_rom(char *rom);

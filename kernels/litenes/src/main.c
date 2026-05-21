@@ -2,7 +2,7 @@
 #include "fce.h"
 #include "psg.h"
 
-extern char rom_mario_nes[];
+extern const unsigned char rom_mario_nes[];
 
 int main() {
   ioe_init();

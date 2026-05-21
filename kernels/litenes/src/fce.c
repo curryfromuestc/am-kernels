@@ -115,12 +115,21 @@ void fce_run() {
     int upt = uptime_ms();
     if (upt - last > 1000) {
       last = upt;
+#ifdef HAS_GUI
       for (int i = 0; i < 80; i++) putch('\b');
       printf("(System time: %ds) FPS = %d", upt / 1000, nr_draw);
+#else
+      // In character mode the framebuffer has just been printed -- redrawing
+      // the FPS line over it would smear the picture. Send the FPS report to
+      // a side channel: a single line below the rendered frame.
+      printf("\n[t=%ds FPS=%d]\n", upt / 1000, nr_draw);
+#endif
       nr_draw = 0;
     }
   }
 }
+
+#ifdef HAS_GUI
 
 void fce_update_screen() {
   frame_cnt++;
@@ -138,3 +147,79 @@ void fce_update_screen() {
 
   for (int i = 0; i < SCR_W * SCR_H; i ++) canvas[i] = bgc;
 }
+
+#else // !HAS_GUI -- character (ASCII art) renderer for serial-only platforms.
+
+// Tunables for the ASCII renderer. The NES canvas is 256 x 240 RGB; we
+// downsample by `ASCII_DOWNX x ASCII_DOWNY` and emit one ASCII glyph per
+// downsampled cell. With ASCII_DOWNX=4 / ASCII_DOWNY=8 the output is
+// 64 columns x 30 rows which fits in a standard terminal and keeps the
+// per-frame UART traffic to ~2 KiB.
+#define ASCII_DOWNX  4
+#define ASCII_DOWNY  8
+#define ASCII_W      (SCR_W / ASCII_DOWNX)
+#define ASCII_H      (SCR_H / ASCII_DOWNY)
+
+// Brightness ramp -- low to high luminance. Picked so empty-sky pixels map
+// to ' ' and bright sprites (Mario red, coin yellow) map to '#'.
+static const char ascii_ramp[] = " .,:;ox%#@";
+#define ASCII_RAMP_N ((int)(sizeof(ascii_ramp) - 1))
+
+// 7-bit ITU-601 luma approximation: Y = (77*R + 150*G + 29*B) >> 8.
+static inline int rgb_to_luma(uint32_t rgb) {
+  int r = (rgb >> 16) & 0xff;
+  int g = (rgb >>  8) & 0xff;
+  int b = (rgb >>  0) & 0xff;
+  return (77 * r + 150 * g + 29 * b) >> 8;  // 0..255
+}
+
+static void ascii_putstr(const char *s) {
+  while (*s) putch(*s++);
+}
+
+void fce_update_screen() {
+  frame_cnt++;
+  if (!candraw()) return;
+
+  int idx = ppu_ram_read(0x3F00);
+  uint32_t bgc = palette[idx];
+
+  // ANSI: ESC [ H = move cursor to home (1,1); ESC [ 2J = clear screen.
+  // On first frame we clear; afterwards we only home so the terminal
+  // overwrites the previous frame in place (much less serial traffic than
+  // a full clear+repaint each time).
+  static int first = 1;
+  if (first) {
+    ascii_putstr("\033[2J\033[H");
+    first = 0;
+  } else {
+    ascii_putstr("\033[H");
+  }
+
+  // Render one row at a time. Each cell averages the luma of ASCII_DOWNX *
+  // ASCII_DOWNY canvas pixels, then picks a glyph from the ramp.
+  // Per-frame cost: ASCII_W * ASCII_H character emissions + newlines.
+  for (int ay = 0; ay < ASCII_H; ay++) {
+    for (int ax = 0; ax < ASCII_W; ax++) {
+      int sum = 0;
+      int x0 = ax * ASCII_DOWNX;
+      int y0 = ay * ASCII_DOWNY;
+      for (int dy = 0; dy < ASCII_DOWNY; dy++) {
+        const uint32_t *row = &canvas[(y0 + dy) * SCR_W + x0];
+        for (int dx = 0; dx < ASCII_DOWNX; dx++) {
+          sum += rgb_to_luma(row[dx]);
+        }
+      }
+      // sum / (ASCII_DOWNX*ASCII_DOWNY)  =>  0..255 averaged luma.
+      int avg = sum / (ASCII_DOWNX * ASCII_DOWNY);
+      int slot = (avg * ASCII_RAMP_N) >> 8;
+      if (slot >= ASCII_RAMP_N) slot = ASCII_RAMP_N - 1;
+      putch(ascii_ramp[slot]);
+    }
+    putch('\n');
+  }
+
+  for (int i = 0; i < SCR_W * SCR_H; i ++) canvas[i] = bgc;
+}
+
+#endif // HAS_GUI
