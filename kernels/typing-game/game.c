@@ -143,11 +143,102 @@ char lut[256] = {
   [AM_KEY_Y] = 'Y', [AM_KEY_Z] = 'Z',
 };
 
+// B2c: text-only auto-demo path used when the platform does NOT provide a
+// framebuffer GPU (the NPC ysyxSoC harness only exposes a UART). The original
+// game depends on AM_GPU_FBDRAW + AM_KEY events from NVBoard, neither of
+// which exist on this SoC. So we drop into a deterministic demo that:
+//
+//   - prints a HUD line every TICK ticks
+//   - lists the in-flight characters (auto-spawned by new_char with a fake
+//     screen of TEXT_W x TEXT_H "cells")
+//   - auto-hits the bottom-most character every HIT_PERIOD ticks (so the
+//     score climbs and chars drain off the screen)
+//   - exits cleanly via halt(0) after DEMO_TICKS so the simulator emits
+//     HIT GOOD TRAP. Without this the game's infinite while(1) would only
+//     terminate on the max-cycle timeout.
+//
+// The demo deliberately mimics game_logic_update's spawn/decay cadence so
+// the output exercises the same code paths as the real video game.
+static void run_text_demo(void) {
+  // Fake a small 64-column x 16-row "screen" so the existing chars[]
+  // bookkeeping (x/y/v/t fields, screen_w/screen_h checks) behaves
+  // sensibly. screen_w/h have to be > CHAR_W/CHAR_H to avoid divide-by-
+  // zero in new_char's velocity computation.
+  screen_w = 64 * CHAR_W;   // 512 px wide  -> 64 logical char columns
+  screen_h = 16 * CHAR_H;   // 256 px tall  -> 16 logical char rows
+  // No texture/blank init: video draws go nowhere on this platform
+  // (GPU stub is __am_noop), so we skip the (expensive) per-character
+  // bitmap blit in render() too.
+
+  enum { DEMO_TICKS = 300, HIT_PERIOD = 6 };
+  printf("=== typing-game text-demo (no GPU/keyboard) ===\n");
+  printf("screen=%dx%d ticks=%d hit-period=%d\n",
+         screen_w, screen_h, DEMO_TICKS, HIT_PERIOD);
+
+  for (int tick = 0; tick < DEMO_TICKS; tick++) {
+    game_logic_update(tick);
+
+    if (tick % HIT_PERIOD == 0) {
+      // Auto-hit the visible falling letter with the largest y (closest to
+      // the bottom). Mirrors what a player would do.
+      int best = -1;
+      for (int i = 0; i < LENGTH(chars); i++) {
+        struct character *c = &chars[i];
+        if (c->ch && c->v > 0 && (best < 0 || c->y > chars[best].y))
+          best = i;
+      }
+      if (best >= 0) {
+        check_hit(chars[best].ch);
+      }
+    }
+
+    // Emit a periodic HUD line so the user sees something is happening.
+    if (tick % 10 == 0) {
+      int live = 0;
+      for (int i = 0; i < LENGTH(chars); i++)
+        if (chars[i].ch) live++;
+      printf("[tick %3d] live=%2d hit=%d miss=%d wrong=%d\n",
+             tick, live, hit, miss, wrong);
+    }
+
+    // Sample one visible character per "frame" so the output also shows
+    // letters scrolling. Skip if nothing is in flight.
+    if (tick % 5 == 0) {
+      for (int i = 0; i < LENGTH(chars); i++) {
+        struct character *c = &chars[i];
+        if (c->ch) {
+          char col = (c->v > 0) ? 'W' : (c->v < 0 ? 'G' : 'R');
+          printf("  char=%c x=%3d y=%3d v=%2d col=%c\n",
+                 c->ch, c->x, c->y, c->v, col);
+          break;  // one sample per frame is plenty
+        }
+      }
+    }
+  }
+
+  printf("=== typing-game text-demo done: hit=%d miss=%d wrong=%d ===\n",
+         hit, miss, wrong);
+  // Pass when at least one hit landed -- the auto-hit logic above should
+  // trip on the first letter spawned, so this is mostly a smoke check.
+  halt(hit > 0 ? 0 : 1);
+}
+
 int main() {
   ioe_init();
-  video_init();
 
   panic_on(!io_read(AM_TIMER_CONFIG).present, "requires timer");
+
+  // B2c: NPC ysyxSoC platform has no framebuffer GPU (npc.h sets present=
+  // false). Drop into the text-only auto-demo so the program still exercises
+  // game_logic_update / check_hit and eventually halts with HIT GOOD TRAP.
+  if (!io_read(AM_GPU_CONFIG).present) {
+    run_text_demo();
+    // run_text_demo always halts; defensive return for the compiler.
+    return 0;
+  }
+
+  // ---- original GPU + keyboard path -------------------------------------
+  video_init();
   panic_on(!io_read(AM_INPUT_CONFIG).present, "requires keyboard");
 
   printf("Type 'ESC' to exit\n");
